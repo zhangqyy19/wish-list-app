@@ -15,8 +15,9 @@ const READERS = [
 ];
 // Fallback metadata API (free tier, no key). Returns title, description, image, publisher.
 const MICROLINK = u => `https://api.microlink.io/?url=${encodeURIComponent(u)}`;
-// Image proxy used when a store refuses to serve its photo to another site.
-const IMG_PROXY = u => `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=900&q=82`;
+// Store photos are shown through an image proxy that trims the margins and pads every photo onto
+// the same white 4:5 tile, so products look a similar size. If the proxy fails, the original loads.
+const IMG_FIT = u => `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=720&h=900&fit=contain&cbg=ffffff&bg=ffffff&trim=15&q=82&output=jpg`;
 // Exchange rates (European Central Bank reference rates, USD base).
 const RATES_URL = 'https://api.frankfurter.dev/v1/latest?base=USD';
 const RATES_FALLBACK = { date: '2026-10-15', fetchedAt: 0, rates: {"AUD":1.447,"BRL":5.057,"CAD":1.4207,"CHF":0.83021,"CNY":6.691,"CZK":21.728,"DKK":6.6693,"EUR":0.89222,"GBP":0.75491,"HKD":7.8473,"HUF":324.41,"IDR":17944,"ILS":3.1022,"INR":95.06,"ISK":121.7,"JPY":157.98,"KRW":1345.9,"MXN":18.5225,"MYR":4.0825,"NOK":9.5039,"NZD":1.7855,"PHP":63.074,"PLN":3.899,"RON":4.7588,"SEK":9.9719,"SGD":1.2829,"THB":33.54,"TRY":49.417,"ZAR":16.5568} };
@@ -30,7 +31,7 @@ const uid = () => (Date.now().toString(36) + Math.random().toString(36).slice(2,
 const hue = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % 360; };
 const TAG_SET = ['beauty','skincare','makeup','fragrance','hair','wellness','fitness','fashion','shoes','bags','jewelry','accessories','home','tech','books','food','travel','kids','other'];
 
-const state = { items: [], view: 'gallery', filter: 'all', sort: 'newest', group: false, hideGot: false, editing: null, draftImage: null, displayCur: 'USD', budget: null, theme: 'light' };
+const state = { items: [], view: 'gallery', filter: 'all', sort: 'newest', group: false, hideGot: false, editing: null, draftImage: null, displayCur: 'USD', budget: null, theme: 'light', collapsed: [] };
 
 /* ---------- prefs + storage (this browser) ---------- */
 const store = {
@@ -40,6 +41,7 @@ const store = {
 };
 state.view = store.get('view', 'gallery'); state.sort = store.get('sort', 'newest'); state.group = store.get('group', false); state.hideGot = store.get('hideGot', false);
 state.displayCur = store.get('displayCur', 'USD'); state.budget = store.get('budget', null); state.theme = store.get('theme', 'light');
+state.collapsed = (store.get('collapsed', []) || []).filter(x => typeof x === 'string');
 
 function persist(){
   if (!store.set('items', state.items)) toast('Could not save: this browser\u2019s storage is full. Export your list, then remove some photos.');
@@ -124,29 +126,57 @@ function fillCurrencySelects(){
 }
 
 /* ---------- images ---------- */
-function shrink(blob, max){
+function loadImage(blob){
   return new Promise((res, rej) => {
     const url = URL.createObjectURL(blob); const img = new Image();
-    img.onload = () => {
-      const s = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
-      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
-      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
-      URL.revokeObjectURL(url);
-      c.toBlob(b => b ? res(b) : rej(new Error('encode')), 'image/jpeg', 0.82);
-    };
+    img.onload = () => { URL.revokeObjectURL(url); res(img); };
     img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('decode')); };
     img.src = url;
   });
 }
+function draw(src, w, h){
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(src, 0, 0, w, h);
+  return c;
+}
+// Crop away the plain background around a product photo so attached photos frame like store ones.
+function trimCanvas(c){
+  const w = c.width, h = c.height, d = c.getContext('2d').getImageData(0, 0, w, h).data;
+  const bg = [d[0], d[1], d[2]];
+  const isBg = i => { const r = d[i], g = d[i + 1], b = d[i + 2]; return (r > 232 && g > 232 && b > 232) || Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]) < 36; };
+  const rowBg = y => { for (let x = 0; x < w; x++) if (!isBg((y * w + x) * 4)) return false; return true; };
+  const colBg = (x, t, b) => { for (let y = t; y <= b; y++) if (!isBg((y * w + x) * 4)) return false; return true; };
+  let top = 0, bottom = h - 1, left = 0, right = w - 1;
+  while (top < bottom && rowBg(top)) top++;
+  while (bottom > top && rowBg(bottom)) bottom--;
+  while (left < right && colBg(left, top, bottom)) left++;
+  while (right > left && colBg(right, top, bottom)) right--;
+  const cw = right - left + 1, ch = bottom - top + 1;
+  if (cw < 24 || ch < 24 || (cw >= w - 2 && ch >= h - 2)) return c;
+  const pad = Math.round(Math.max(cw, ch) * 0.08);
+  const sx = Math.max(0, left - pad), sy = Math.max(0, top - pad), sw = Math.min(w - sx, cw + pad * 2), sh = Math.min(h - sy, ch + pad * 2);
+  const o = document.createElement('canvas'); o.width = sw; o.height = sh;
+  const x = o.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, sw, sh); x.drawImage(c, sx, sy, sw, sh, 0, 0, sw, sh);
+  return o;
+}
+async function prepPhoto(blob){
+  const img = await loadImage(blob);
+  let s = Math.min(1, 1200 / Math.max(img.naturalWidth, img.naturalHeight));
+  let c = draw(img, Math.max(1, Math.round(img.naturalWidth * s)), Math.max(1, Math.round(img.naturalHeight * s)));
+  try { c = trimCanvas(c); } catch {}
+  s = Math.min(1, 800 / Math.max(c.width, c.height));
+  if (s < 1) c = draw(c, Math.round(c.width * s), Math.round(c.height * s));
+  return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encode')), 'image/jpeg', 0.82));
+}
 const toDataURL = blob => new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
-// Photos the user attaches are stored inline, shrunk so a few dozen fit in localStorage.
+// Photos the user attaches are trimmed, shrunk and stored inline so a few dozen fit in localStorage.
 async function storeImage(blob){
-  try { const small = await shrink(blob, 800); return { imageData: await toDataURL(small), image: undefined }; }
+  try { const small = await prepPhoto(blob); return { imageData: await toDataURL(small), image: undefined }; }
   catch { toast('Could not read that image.'); return {}; }
 }
 const imgSrc = i => i.imageData || i.image || null;
-// Store photos: skip placeholders, force https (GitHub Pages is https, so http images would be blocked).
-const BAD_IMG_RX = /no-image|noimage|placeholder|default-image|spacer|blank\.|\.gif(\?|$)|opengraph-\d+x\d+|\/logo/i;
+// Store photos: skip placeholders and logos, force https (GitHub Pages is https, so http images would be blocked).
+const BAD_IMG_RX = /no-image|noimage|placeholder|default-image|spacer|blank\.|\.gif(\?|$)|\.svg(\?|$)|opengraph-\d+x\d+|logo|favicon|icon-|brand-?mark|sprite|share-image|og-default|social-?(share|default|image)/i;
 function pickImage(cands){
   for (let c of cands) {
     if (!c || typeof c !== 'string') continue;
@@ -156,16 +186,23 @@ function pickImage(cands){
   }
   return '';
 }
-// Called from the img tag: first failure retries through the image proxy, second hides the photo.
+// Called from the img tag. Stage 0 is the fitted proxy copy; a failure falls back to the original
+// store URL; a second failure hides the photo so the placeholder underneath shows.
 window.wlImgErr = function(img){
   const orig = img.dataset.src;
-  if (orig && !img.dataset.retry && /^https?:\/\//i.test(orig)) { img.dataset.retry = '1'; img.src = IMG_PROXY(orig); return; }
+  if (orig && img.dataset.stage === '0' && /^https?:\/\//i.test(orig)) { img.dataset.stage = '1'; img.src = orig; return; }
   img.style.display = 'none';
 };
-const imgTag = (src, lazy) => `<img src="${esc(src)}" data-src="${esc(src)}" alt="" ${lazy ? 'loading="lazy"' : ''} referrerpolicy="no-referrer" onerror="wlImgErr(this)">`;
+// A loaded picture smaller than an icon is a logo or tracking pixel, not a product photo.
+window.wlImgOk = function(img){ if (img.naturalWidth < 120 || img.naturalHeight < 120) window.wlImgErr(img); };
+function imgTag(src, lazy){
+  const l = lazy ? 'loading="lazy"' : '';
+  if (!/^https?:\/\//i.test(src)) return `<img src="${esc(src)}" alt="" ${l} onerror="this.style.display='none'">`;
+  return `<img src="${esc(IMG_FIT(src))}" data-src="${esc(src)}" data-stage="0" alt="" ${l} referrerpolicy="no-referrer" onerror="wlImgErr(this)" onload="wlImgOk(this)">`;
+}
 
 /* ---------- link heuristics (instant guess) ---------- */
-const BRANDS = {sephora:'Sephora',ulta:'Ulta Beauty',glossier:'Glossier',rhodeskin:'rhode',ouraring:'Oura',amazon:'Amazon',nordstrom:'Nordstrom',aritzia:'Aritzia',zara:'Zara',lululemon:'lululemon',apple:'Apple',diptyqueparis:'Diptyque',charlottetilbury:'Charlotte Tilbury',rarebeauty:'Rare Beauty',summerfridays:'Summer Fridays',skims:'SKIMS',mejuri:'Mejuri',revolve:'Revolve',ssense:'SSENSE',netaporter:'Net-a-Porter',farfetch:'Farfetch',anthropologie:'Anthropologie',freepeople:'Free People',urbanoutfitters:'Urban Outfitters',target:'Target',etsy:'Etsy',shopbop:'Shopbop',saksfifthavenue:'Saks',bloomingdales:"Bloomingdale's",lelabofragrances:'Le Labo',byredo:'Byredo',aesop:'Aesop',drunkelephant:'Drunk Elephant',tatcha:'Tatcha',kosas:'Kosas',iliabeauty:'ILIA',meritbeauty:'MERIT',saiehello:'Saie',hourglasscosmetics:'Hourglass',patmcgrath:'Pat McGrath Labs',fentybeauty:'Fenty Beauty',youthtothepeople:'Youth To The People',stanley1913:'Stanley',dyson:'Dyson',fromourplace:'Our Place',parachutehome:'Parachute',brooklinen:'Brooklinen',jcrew:'J.Crew',madewell:'Madewell',everlane:'Everlane',thereformation:'Reformation',ganni:'GANNI',toteme:'Toteme',newbalance:'New Balance',nike:'Nike',adidas:'adidas',hoka:'HOKA',aloyoga:'Alo',vuori:'Vuori',setactive:'SET Active',therabody:'Therabody',whoop:'WHOOP',bookshop:'Bookshop',barnesandnoble:'Barnes & Noble',goop:'goop',violetgrey:'Violet Grey',cultbeauty:'Cult Beauty',spacenk:'Space NK',dermstore:'Dermstore',credobeauty:'Credo',bluemercury:'Bluemercury',glowrecipe:'Glow Recipe',laneige:'LANEIGE',soldejaneiro:'Sol de Janeiro',ouai:'OUAI',dieuxskin:'Dieux',augustinusbader:'Augustinus Bader',westmanatelier:'Westman Atelier'};
+const BRANDS = {sephora:'Sephora',ulta:'Ulta Beauty',glossier:'Glossier',rhodeskin:'rhode',ouraring:'Oura',amazon:'Amazon',nordstrom:'Nordstrom',aritzia:'Aritzia',zara:'Zara',lululemon:'lululemon',apple:'Apple',diptyqueparis:'Diptyque',charlottetilbury:'Charlotte Tilbury',rarebeauty:'Rare Beauty',summerfridays:'Summer Fridays',skims:'SKIMS',mejuri:'Mejuri',revolve:'Revolve',ssense:'SSENSE',netaporter:'Net-a-Porter',farfetch:'Farfetch',anthropologie:'Anthropologie',freepeople:'Free People',urbanoutfitters:'Urban Outfitters',target:'Target',etsy:'Etsy',shopbop:'Shopbop',saksfifthavenue:'Saks',bloomingdales:"Bloomingdale's",lelabofragrances:'Le Labo',byredo:'Byredo',aesop:'Aesop',drunkelephant:'Drunk Elephant',tatcha:'Tatcha',kosas:'Kosas',iliabeauty:'ILIA',meritbeauty:'MERIT',saiehello:'Saie',hourglasscosmetics:'Hourglass',patmcgrath:'Pat McGrath Labs',fentybeauty:'Fenty Beauty',youthtothepeople:'Youth To The People',stanley1913:'Stanley',dyson:'Dyson',fromourplace:'Our Place',parachutehome:'Parachute',brooklinen:'Brooklinen',jcrew:'J.Crew',madewell:'Madewell',everlane:'Everlane',thereformation:'Reformation',ganni:'GANNI',toteme:'Toteme',newbalance:'New Balance',nike:'Nike',adidas:'adidas',hoka:'HOKA',aloyoga:'Alo',vuori:'Vuori',setactive:'SET Active',therabody:'Therabody',whoop:'WHOOP',bookshop:'Bookshop',barnesandnoble:'Barnes & Noble',goop:'goop',violetgrey:'Violet Grey',cultbeauty:'Cult Beauty',spacenk:'Space NK',dermstore:'Dermstore',credobeauty:'Credo',bluemercury:'Bluemercury',glowrecipe:'Glow Recipe',laneige:'LANEIGE',soldejaneiro:'Sol de Janeiro',ouai:'OUAI',dieuxskin:'Dieux',augustinusbader:'Augustinus Bader',westmanatelier:'Westman Atelier',hermes:'Hermès',chanel:'CHANEL',dior:'Dior',louisvuitton:'Louis Vuitton',gucci:'Gucci',prada:'Prada',celine:'CELINE',ysl:'Saint Laurent',bottegaveneta:'Bottega Veneta',loewe:'LOEWE',miumiu:'Miu Miu',cartier:'Cartier',tiffany:'Tiffany & Co.',vancleefarpels:'Van Cleef & Arpels',burberry:'Burberry',balenciaga:'Balenciaga',fendi:'FENDI',valentino:'Valentino',givenchy:'Givenchy',jacquemus:'Jacquemus',coach:'Coach',polene:'Polène',maisonmargiela:'Maison Margiela',therow:'The Row',khaite:'KHAITE',mytheresa:'Mytheresa',matchesfashion:'MATCHES',luisaviaroma:'LuisaViaRoma'};
 const TAG_RULES = [
   ['fragrance', /perfume|fragrance|parfum|eau de|eau-de|cologne|lelabo|byredo|diptyque/i],
   ['skincare', /skincare|skin care|serum|moisturi|cleanser|\bspf\b|sunscreen|retinol|toner|face mask|face-mask|sheet mask|eye cream|eye-cream|peptide|drunkelephant|tatcha|aesop|youthtothepeople|glowrecipe|laneige|dieux|augustinusbader|dermstore/i],
@@ -177,7 +214,7 @@ const TAG_RULES = [
   ['shoes', /shoe|sneaker|\bboot|loafer|heel|sandal|\bmule|ballet flat|ballet-flat/i],
   ['bags', /\bbag\b|tote|purse|clutch|wallet|crossbody|backpack/i],
   ['jewelry', /jewel|necklace|earring|bracelet|\bhoop|pendant|mejuri|\bring\b/i],
-  ['fashion', /dress|jacket|coat|skirt|jeans|denim|blouse|sweater|cardigan|knit|trouser|\bpant|aritzia|zara|reformation|ganni|toteme|revolve|ssense|everlane|madewell|jcrew|skims|netaporter|farfetch|anthropologie|freepeople/i],
+  ['fashion', /dress|jacket|coat|skirt|jeans|denim|blouse|sweater|cardigan|knit|trouser|\bpant|scarf|belt|sunglass|aritzia|zara|reformation|ganni|toteme|revolve|ssense|everlane|madewell|jcrew|skims|netaporter|farfetch|anthropologie|freepeople|hermes|chanel|\bdior|louisvuitton|gucci|prada|celine|bottegaveneta|loewe|miumiu|burberry|balenciaga|fendi|valentino|givenchy|jacquemus|margiela|therow|khaite|mytheresa|matchesfashion|luisaviaroma/i],
   ['home', /\bhome\b|decor|vase|pillow|bedding|sheet set|sheet-set|towel|kitchen|cookware|ourplace|parachute|brooklinen|lamp|\bmug\b|glassware|stanley/i],
   ['tech', /apple|airpods|iphone|ipad|kindle|headphone|speaker|camera|dyson|tech|smartwatch/i],
   ['books', /\bbook|novel|bookshop|barnesandnoble|paperback|hardcover/i],
@@ -205,10 +242,17 @@ function tagsFor(text){
 }
 function guessFromUrl(u){
   const host = u.hostname.toLowerCase();
-  const segs = u.pathname.split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } }).filter(x => x && !/^(p|product|products|dp|item|items|shop|en|us|uk|ca|en-us|en-ca|en-gb|collections|c|s|b)$/i.test(x) && !/^\d+$/.test(x) && !/^[a-z0-9]{8,}$/i.test(x.replace(/-/g,'')) );
-  const slug = segs.sort((a, b) => b.length - a.length)[0] || '';
-  const words = slug.replace(/\.(html?|aspx|php)$/i, '').split(/[-_+\s]+/).filter(w => w && !/^\d{4,}$/.test(w) && !(/\d/.test(w) && /[a-z]/i.test(w) && w.length > 5));
-  const name = words.join(' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 80) || 'Untitled';
+  // Keep path segments that read like a product slug; drop locale codes, section words and bare ids
+  // ("120210", "prod5020054", "H021056Z02350") but keep slugs that merely end in a code.
+  const SECTION_RX = /^(p|pd|product|products|dp|item|items|shop|en|us|uk|ca|fr|de|it|es|jp|en[-_][a-z]{2}|[a-z]{2}[-_][a-z]{2}|collections|c|s|b|women|men|womens|mens|new|sale)$/i;
+  const idLike = x => !x.includes('-') && (/^\d+$/.test(x) || (/\d/.test(x) && x.length >= 6) || /^[0-9a-f]{12,}$/i.test(x));
+  const segs = u.pathname.split('/').map(x => { try { return decodeURIComponent(x); } catch { return x; } }).filter(x => x && !SECTION_RX.test(x) && !idLike(x));
+  // The product slug is normally the last hyphenated segment ("…/jackets/Define-Jacket/_/prod5020054").
+  const hyph = segs.filter(x => x.includes('-'));
+  const slug = hyph.length ? hyph[hyph.length - 1] : (segs.slice().sort((a, b) => b.length - a.length)[0] || '');
+  const codeWord = w => /\d/.test(w) && /[a-z]/i.test(w) && w.length > 5;
+  const words = slug.replace(/\.(html?|aspx|php|jsp)$/i, '').split(/[-_+\s]+/).filter(w => w && !/^\d{4,}$/.test(w) && !codeWord(w));
+  const name = words.join(' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\bNo(\d)/g, 'No. $1').slice(0, 80) || brandFromHost(host) + ' item';
   const hay = host + ' ' + u.pathname;
   const limited = LIMITED_SLUG_RX.test(u.pathname);
   return { name, brand: brandFromHost(host), tags: tagsFor(hay), limited, limitedNote: limited ? 'The link mentions a special edition' : undefined, color: hue(host) };
@@ -379,6 +423,8 @@ function visible(){
     case 'price-desc': arr.sort((a, b) => (shown(b) ?? -1) - (shown(a) ?? -1)); break;
     case 'price-asc': arr.sort((a, b) => (shown(a) ?? Infinity) - (shown(b) ?? Infinity)); break;
     case 'name': arr.sort((a, b) => String(a.name).localeCompare(String(b.name))); break;
+    case 'brand': arr.sort((a, b) => String(a.brand || hostOf(a.url)).localeCompare(String(b.brand || hostOf(b.url)), undefined, { sensitivity: 'base' }) || String(a.name).localeCompare(String(b.name))); break;
+    case 'category': arr.sort((a, b) => String((a.tags || [])[0] || 'other').localeCompare(String((b.tags || [])[0] || 'other')) || String(a.name).localeCompare(String(b.name))); break;
     default: arr.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
   return arr;
@@ -391,9 +437,12 @@ const leBadge = (cls = '') => `<span class="le ${cls}" title="Limited edition">$
 function phHTML(i){ return `<div class="ph" style="--h:${Number(i.color) || hue(i.brand)}"><span>${esc((i.brand || i.name || '?').trim().charAt(0).toUpperCase())}</span></div>`; }
 function mediaHTML(i){
   const src = imgSrc(i);
-  // Placeholder sits underneath; a remote photo that fails is retried through the proxy, then hidden.
-  return phHTML(i) + (src ? imgTag(src, true) : '') + (i.status === 'reading' ? '<span class="reading">Reading link</span>' : '');
+  // Placeholder sits underneath; a remote photo that fails falls back to the original, then hides.
+  const hint = !src && i.status !== 'reading' ? '<span class="addph">Add a photo</span>' : '';
+  return phHTML(i) + (src ? imgTag(src, true) : '') + hint + (i.status === 'reading' ? '<span class="reading">Reading link</span>' : '');
 }
+const TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
+const delBtn = () => `<button type="button" class="ghost del" data-action="del" title="Remove" aria-label="Remove">${TRASH}</button>`;
 const tagsHTML = tags => (tags || []).map(t => `<span class="tag" style="--h:${hue(t)}">${esc(t)}</span>`).join('');
 function priceHTML(i){
   if (typeof i.price !== 'number') return '<span class="noprice">No price yet</span>';
@@ -413,7 +462,7 @@ function cardHTML(i){
       <div class="card-foot"><div class="tags">${tagsHTML(i.tags)}</div><div class="price">${priceHTML(i)}</div></div>
       <div class="card-actions">
         ${i.url ? `<a class="link" href="${esc(i.url)}" target="_blank" rel="noopener">View ${esc(hostOf(i.url))}</a>` : '<span></span>'}
-        <button type="button" class="ghost" data-action="got" aria-pressed="${i.got ? 'true' : 'false'}">${i.got ? 'Got it ✓' : 'Got it'}</button>
+        <span class="acts"><button type="button" class="ghost" data-action="got" aria-pressed="${i.got ? 'true' : 'false'}">${i.got ? 'Got it ✓' : 'Got it'}</button>${delBtn()}</span>
       </div>
     </div></article>`;
 }
@@ -431,6 +480,7 @@ function rowHTML(i){
         ${i.url ? `<a class="link" href="${esc(i.url)}" target="_blank" rel="noopener">View</a>` : ''}
         <button type="button" class="ghost" data-action="got" aria-pressed="${i.got ? 'true' : 'false'}">${i.got ? 'Got it ✓' : 'Got it'}</button>
         <button type="button" class="ghost" data-action="edit">Edit</button>
+        ${delBtn()}
       </div>
     </div></article>`;
 }
@@ -488,8 +538,12 @@ function render(){
   const wrapCls = state.view === 'gallery' ? 'gallery' : 'list';
   if (state.group && state.filter === 'all') {
     const groups = {}; for (const i of arr) { const t = (i.tags && i.tags[0]) || 'other'; (groups[t] ||= []).push(i); }
-    main.innerHTML = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b)).map(t =>
-      `<h2 class="group-h"><span>${esc(t)}</span><span class="n">${groups[t].length}</span><span class="sum">${money(sumOf(groups[t]))}</span></h2><div class="${wrapCls}">${groups[t].map(item).join('')}</div>`).join('');
+    const CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+    main.innerHTML = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length || a.localeCompare(b)).map(t => {
+      const open = !state.collapsed.includes(t);
+      return `<h2 class="group-h ${open ? '' : 'is-closed'}"><button type="button" class="group-toggle" data-group="${esc(t)}" aria-expanded="${open}">${CHEV}<span>${esc(t)}</span></button><span class="n">${groups[t].length}</span><span class="sum">${money(sumOf(groups[t]))}</span></h2>` +
+        (open ? `<div class="${wrapCls}">${groups[t].map(item).join('')}</div>` : '');
+    }).join('');
   } else {
     main.innerHTML = `<div class="${wrapCls}">${arr.map(item).join('')}</div>`;
   }
@@ -572,10 +626,22 @@ async function importJSON(file){
 /* ---------- events ---------- */
 $('#themeBtn').onclick = () => applyTheme(state.theme === 'dark' ? 'light' : 'dark');
 $('#items').addEventListener('click', ev => {
+  const g = ev.target.closest('[data-group]');
+  if (g) {
+    const t = g.dataset.group;
+    state.collapsed = state.collapsed.includes(t) ? state.collapsed.filter(x => x !== t) : [...state.collapsed, t];
+    store.set('collapsed', state.collapsed); render(); return;
+  }
   const b = ev.target.closest('[data-action]'); if (!b) return;
   const id = b.closest('[data-id]')?.dataset.id; const i = state.items.find(x => x.id === id); if (!i) return;
   if (b.dataset.action === 'edit') openSheet(id);
   if (b.dataset.action === 'got') saveItem({ ...i, got: !i.got });
+  if (b.dataset.action === 'del') {
+    // Two taps to remove: the first arms the button for three seconds.
+    if (b.dataset.armed) { deleteItem(id); toast(`Removed ${i.name}.`); return; }
+    b.dataset.armed = '1'; b.textContent = 'Sure?';
+    setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.innerHTML = TRASH; } }, 3000);
+  }
 });
 $('#chips').addEventListener('click', ev => { const c = ev.target.closest('.chip'); if (!c) return; state.filter = c.dataset.tag; render(); });
 $('#viewGallery').onclick = () => { state.view = 'gallery'; store.set('view', 'gallery'); render(); };

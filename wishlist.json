@@ -9,7 +9,10 @@
       "price": 20,
       "priceGuess": false,
       "currency": "USD",
-      "tags": ["beauty", "skincare"],
+      "tags": [
+        "beauty",
+        "skincare"
+      ],
       "limited": false,
       "image": "https://www.rhodeskin.com/cdn/shop/files/main-png-2000x2000_unscented_480x480.png?v=1705598678",
       "color": 350,
@@ -25,9 +28,12 @@
       "price": 349,
       "priceGuess": true,
       "currency": "USD",
-      "tags": ["wellness", "tech"],
+      "tags": [
+        "wellness",
+        "tech"
+      ],
       "limited": false,
-      "image": "https://images.weserv.nl/?url=https%3A%2F%2Fourahealth.imgix.net%2FlineItem%2For4-silver.png%3Fs%3D0328b44245d42e02f75296a981eed5a0&w=900&q=82",
+      "image": "https://ourahealth.imgix.net/lineItem/or4-silver.png?s=0328b44245d42e02f75296a981eed5a0",
       "color": 210,
       "createdAt": 1760300000000,
       "got": false,
@@ -41,7 +47,10 @@
       "price": 32,
       "priceGuess": false,
       "currency": "USD",
-      "tags": ["fragrance", "beauty"],
+      "tags": [
+        "fragrance",
+        "beauty"
+      ],
       "limited": false,
       "image": "https://www.glossier.com/cdn/shop/files/glossier-fragrance-you-01.png?v=1762200697",
       "color": 345,
@@ -57,7 +66,10 @@
       "price": 90,
       "priceGuess": false,
       "currency": "USD",
-      "tags": ["home", "wellness"],
+      "tags": [
+        "home",
+        "wellness"
+      ],
       "limited": true,
       "limitedNote": "Example of the gold limited-edition mark",
       "image": "https://us.diptyqueparis.com/cdn/shop/files/diptyque-baiesclassiccandle-B2-front.webp?v=1781571444&width=1200",
