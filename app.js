@@ -15,9 +15,13 @@ const READERS = [
 ];
 // Fallback metadata API (free tier, no key). Returns title, description, image, publisher.
 const MICROLINK = u => `https://api.microlink.io/?url=${encodeURIComponent(u)}`;
-// Store photos are shown through an image proxy that trims the margins and pads every photo onto
-// the same white 4:5 tile, so products look a similar size. If the proxy fails, the original loads.
-const IMG_FIT = u => `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=720&h=900&fit=contain&cbg=ffffff&bg=ffffff&trim=15&q=82&output=jpg`;
+// Store photos load through an image proxy that shrinks them, flattens transparency to white and
+// allows cross-origin reading, so the page can measure the product and reframe it (see wlFit).
+// If the proxy fails, the original loads untouched.
+const IMG_FIT = u => `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=900&h=1100&fit=inside&we&bg=ffffff&q=85&output=jpg`;
+// Every photo is redrawn onto the same 4:5 white tile with the product centered and scaled so its
+// longest side spans this share of the tile. That is what makes items look the same size.
+const TILE = { w: 720, h: 900, fill: 0.70 };
 // Exchange rates (European Central Bank reference rates, USD base).
 const RATES_URL = 'https://api.frankfurter.dev/v1/latest?base=USD';
 const RATES_FALLBACK = { date: '2026-10-15', fetchedAt: 0, rates: {"AUD":1.447,"BRL":5.057,"CAD":1.4207,"CHF":0.83021,"CNY":6.691,"CZK":21.728,"DKK":6.6693,"EUR":0.89222,"GBP":0.75491,"HKD":7.8473,"HUF":324.41,"IDR":17944,"ILS":3.1022,"INR":95.06,"ISK":121.7,"JPY":157.98,"KRW":1345.9,"MXN":18.5225,"MYR":4.0825,"NOK":9.5039,"NZD":1.7855,"PHP":63.074,"PLN":3.899,"RON":4.7588,"SEK":9.9719,"SGD":1.2829,"THB":33.54,"TRY":49.417,"ZAR":16.5568} };
@@ -186,19 +190,64 @@ function pickImage(cands){
   }
   return '';
 }
-// Called from the img tag. Stage 0 is the fitted proxy copy; a failure falls back to the original
-// store URL; a second failure hides the photo so the placeholder underneath shows.
+// Bounding box of the non-background pixels (background = near-white or the corner color).
+function bbox(d, w, h){
+  const corner = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+  const cs = [corner(0, 0), corner(w - 1, 0), corner(0, h - 1), corner(w - 1, h - 1)];
+  const bg = [0, 1, 2].map(k => Math.round(cs.reduce((s, c) => s + c[k], 0) / 4));
+  const isBg = i => { const r = d[i], g = d[i + 1], b = d[i + 2]; return (r > 232 && g > 232 && b > 232) || Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]) < 36; };
+  const rowBg = y => { for (let x = 0; x < w; x++) if (!isBg((y * w + x) * 4)) return false; return true; };
+  const colBg = (x, t, b) => { for (let y = t; y <= b; y++) if (!isBg((y * w + x) * 4)) return false; return true; };
+  let t = 0, b = h - 1, l = 0, r = w - 1;
+  while (t < b && rowBg(t)) t++;
+  while (b > t && rowBg(b)) b--;
+  while (l < r && colBg(l, t, b)) l++;
+  while (r > l && colBg(r, t, b)) r--;
+  return { l, t, r, b };
+}
+// Redraw a loaded photo onto the standard tile: product found, centered, scaled to TILE.fill.
+// Needs pixel access, so it works for proxied and attached photos and is skipped for the raw fallback.
+const fitCache = new Map();
+window.wlFit = function(img){
+  if (img.dataset.fitted) return;
+  const key = img.dataset.src || img.src;
+  const hit = fitCache.get(key);
+  if (hit) { img.dataset.fitted = '1'; img.src = hit; return; }
+  try {
+    const iw = img.naturalWidth, ih = img.naturalHeight; if (!iw || !ih) return;
+    const s0 = Math.min(1, 500 / Math.max(iw, ih));
+    const small = draw(img, Math.max(1, Math.round(iw * s0)), Math.max(1, Math.round(ih * s0)));
+    const bb = bbox(small.getContext('2d').getImageData(0, 0, small.width, small.height).data, small.width, small.height);
+    let bw = bb.r - bb.l + 1, bh = bb.b - bb.t + 1;
+    if (bw < 8 || bh < 8) { bb.l = 0; bb.t = 0; bw = small.width; bh = small.height; }
+    // Scale so the longest side fills TILE.fill of the tile, without blowing up a tiny source.
+    let scale = Math.min(TILE.w * TILE.fill / bw, TILE.h * TILE.fill / bh);
+    scale = Math.min(scale, 1.6 / s0);
+    const dw = bw * scale, dh = bh * scale;
+    const o = document.createElement('canvas'); o.width = TILE.w; o.height = TILE.h;
+    const x = o.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, TILE.w, TILE.h); x.imageSmoothingQuality = 'high';
+    x.drawImage(img, bb.l / s0, bb.t / s0, bw / s0, bh / s0, (TILE.w - dw) / 2, (TILE.h - dh) / 2, dw, dh);
+    const url = o.toDataURL('image/jpeg', 0.86);
+    fitCache.set(key, url); img.dataset.fitted = '1'; img.src = url;
+  } catch { img.dataset.fitted = '1'; }
+};
+// Called from the img tag. Stage 0 is the proxy copy; a failure falls back to the original store
+// URL (without cross-origin reading, so it cannot be reframed); a second failure hides the photo.
 window.wlImgErr = function(img){
   const orig = img.dataset.src;
-  if (orig && img.dataset.stage === '0' && /^https?:\/\//i.test(orig)) { img.dataset.stage = '1'; img.src = orig; return; }
+  if (orig && img.dataset.stage === '0' && /^https?:\/\//i.test(orig)) { img.dataset.stage = '1'; img.removeAttribute('crossorigin'); img.src = orig; return; }
   img.style.display = 'none';
 };
-// A loaded picture smaller than an icon is a logo or tracking pixel, not a product photo.
-window.wlImgOk = function(img){ if (img.naturalWidth < 120 || img.naturalHeight < 120) window.wlImgErr(img); };
+window.wlImgOk = function(img){
+  if (img.dataset.fitted) return;
+  // A loaded picture smaller than an icon is a logo or tracking pixel, not a product photo.
+  if (img.naturalWidth < 120 || img.naturalHeight < 120) { window.wlImgErr(img); return; }
+  window.wlFit(img);
+};
 function imgTag(src, lazy){
   const l = lazy ? 'loading="lazy"' : '';
-  if (!/^https?:\/\//i.test(src)) return `<img src="${esc(src)}" alt="" ${l} onerror="this.style.display='none'">`;
-  return `<img src="${esc(IMG_FIT(src))}" data-src="${esc(src)}" data-stage="0" alt="" ${l} referrerpolicy="no-referrer" onerror="wlImgErr(this)" onload="wlImgOk(this)">`;
+  if (!/^https?:\/\//i.test(src)) return `<img src="${esc(src)}" alt="" ${l} onerror="this.style.display='none'" onload="wlImgOk(this)">`;
+  return `<img src="${esc(IMG_FIT(src))}" data-src="${esc(src)}" data-stage="0" crossorigin="anonymous" alt="" ${l} referrerpolicy="no-referrer" onerror="wlImgErr(this)" onload="wlImgOk(this)">`;
 }
 
 /* ---------- link heuristics (instant guess) ---------- */
@@ -222,7 +271,7 @@ const TAG_RULES = [
 // Loose test for URL slugs, strict test for page text (marketing copy says "holiday" a lot).
 const LIMITED_SLUG_RX = /limited|special-edition|collector|anniversary|collab|capsule|holiday-edition|exclusive/i;
 const LIMITED_TEXT_RX = /limited[\s-]edition|limited[\s-]release|limited[\s-]run|special[\s-]edition|collector'?s?[\s-]edition|holiday[\s-]edition|anniversary[\s-]edition|exclusive[\s-]edition|while supplies last|limited quantities|limited time only|capsule collection|\bcollab(?:oration)?\b|\bone[\s-]time (?:release|drop)\b/i;
-const BLOCKED_RX = /access denied|forbidden|robot|captcha|just a moment|attention required|are you a human|blocked|verify you|\b404\b|not found|introuvable|page unavailable/i;
+const BLOCKED_RX = /access denied|forbidden|robot|captcha|just a moment|attention required|are you a human|blocked|verify you|secure access|really you|unusual|too many requests|\b404\b|not found|introuvable|page unavailable|service unavailable/i;
 
 function parseUrl(raw){
   let s = String(raw || '').trim(); if (!s) return null;
@@ -250,12 +299,14 @@ function guessFromUrl(u){
   // The product slug is normally the last hyphenated segment ("…/jackets/Define-Jacket/_/prod5020054").
   const hyph = segs.filter(x => x.includes('-'));
   const slug = hyph.length ? hyph[hyph.length - 1] : (segs.slice().sort((a, b) => b.length - a.length)[0] || '');
-  const codeWord = w => /\d/.test(w) && /[a-z]/i.test(w) && w.length > 5;
-  const words = slug.replace(/\.(html?|aspx|php|jsp)$/i, '').split(/[-_+\s]+/).filter(w => w && !/^\d{4,}$/.test(w) && !codeWord(w));
+  // Style codes mixed into slugs ("M0531OZDC", "M900", "Y0996000") carry letters and 2+ digits.
+  const codeWord = w => /[a-z]/i.test(w) && (/\d.*\d/.test(w) || (/\d/.test(w) && w.length > 5));
+  const words = slug.replace(/\.(html?|aspx|php|jsp)$/i, '').split(/[-_+\s]+/).filter(w => w && !/^\d{3,}$/.test(w) && !codeWord(w));
   const name = words.join(' ').replace(/\b\w/g, c => c.toUpperCase()).replace(/\bNo(\d)/g, 'No. $1').slice(0, 80) || brandFromHost(host) + ' item';
+  const slugWords = words.map(w => w.toLowerCase()).filter(w => w.length >= 3 && !/^\d+$/.test(w));
   const hay = host + ' ' + u.pathname;
   const limited = LIMITED_SLUG_RX.test(u.pathname);
-  return { name, brand: brandFromHost(host), tags: tagsFor(hay), limited, limitedNote: limited ? 'The link mentions a special edition' : undefined, color: hue(host) };
+  return { name, slugWords, brand: brandFromHost(host), tags: tagsFor(hay), limited, limitedNote: limited ? 'The link mentions a special edition' : undefined, color: hue(host) };
 }
 
 /* ---------- reading the store page ---------- */
@@ -382,6 +433,14 @@ async function refine(id){
   if (!m) { try { m = await fetchMicrolink(u.href); if (m && (!m.title || BLOCKED_RX.test(m.title))) m = null; } catch { m = null; } }
   const cur = state.items.find(x => x.id === id); if (!cur) return false;
   if (!m) { console.warn(`[wishlist] no reader could read ${u.href}`); saveItem({ ...cur, status: 'ready' }); return false; }
+  // Some stores answer readers with a different page (Dior's beauty site sends another product).
+  // If none of the link's own words appear in what came back, the page is not this product.
+  const sw = guessFromUrl(u).slugWords;
+  const hay = `${m.ldName} ${m.title} ${m.ldDescription} ${m.description}`.toLowerCase();
+  if (sw.length >= 2 && !sw.some(w => hay.includes(w))) {
+    console.warn(`[wishlist] page for ${u.href} does not mention ${sw.join('/')} (got "${m.ldName || m.title}"), keeping the link guess`);
+    saveItem({ ...cur, status: 'ready' }); return false;
+  }
   console.info('[wishlist] metadata for', u.href, { title: m.title, ldName: m.ldName, brand: m.brand, site: m.site, price: m.price, currency: m.currency, ldPrice: m.ldPrice, ldCurrency: m.ldCurrency, images: [...m.images, ...m.ldImages].filter(Boolean).slice(0, 3) });
 
   const host = u.hostname.toLowerCase();
