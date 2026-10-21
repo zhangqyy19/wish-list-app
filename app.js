@@ -254,7 +254,12 @@ window.wlFit = function(img){
 // URL (without cross-origin reading, so it cannot be reframed); a second failure hides the photo.
 window.wlImgErr = function(img){
   const orig = img.dataset.src;
-  if (orig && img.dataset.stage === '0' && /^https?:\/\//i.test(orig)) { img.dataset.stage = '1'; img.removeAttribute('crossorigin'); img.src = orig; return; }
+  if (orig && img.dataset.stage === '0' && /^https?:\/\//i.test(orig)) {
+    img.dataset.stage = '1'; img.removeAttribute('crossorigin'); img.src = orig;
+    // Flag the card: this photo cannot be measured, so it cannot be centered on the product.
+    img.closest('.media')?.classList.add('is-raw');
+    return;
+  }
   img.style.display = 'none';
 };
 window.wlImgOk = function(img){
@@ -296,6 +301,13 @@ function parseUrl(raw){
   let s = String(raw || '').trim(); if (!s) return null;
   if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
   try { const u = new URL(s); return /\./.test(u.hostname) ? u : null; } catch { return null; }
+}
+// Same product, same key: ignores the hash, tracking parameters, a trailing slash and host case.
+function canonUrl(raw){
+  const u = parseUrl(raw); if (!u) return '';
+  const keep = [...u.searchParams.entries()].filter(([k]) => !/^(utm_|fbclid|gclid|mc_|ref|srsltid|cm_|icid|_ga)/i.test(k));
+  const q = keep.length ? '?' + new URLSearchParams(keep).toString() : '';
+  return u.hostname.toLowerCase().replace(/^www\./, '') + u.pathname.replace(/\/+$/, '').toLowerCase() + q;
 }
 function brandFromHost(host){
   const parts = host.replace(/^www\./, '').split('.');
@@ -492,7 +504,8 @@ async function addFromLink(raw, imageBlob, given = {}){
   const g = guessFromUrl(u);
   // Saving a link that is already on the list (e.g. the bookmarklet used again on the same product)
   // updates that card in place instead of adding a duplicate.
-  const existing = state.items.find(x => x.url === u.href);
+  const key = canonUrl(u.href);
+  const existing = state.items.find(x => canonUrl(x.url) === key);
   const item = existing
     ? { ...existing, status: 'reading' }
     : { id: uid(), url: u.href, name: g.name, brand: g.brand, tags: g.tags, limited: g.limited, limitedNote: g.limitedNote, color: g.color, price: null, currency: 'USD', createdAt: Date.now(), status: 'reading', got: false };
@@ -875,8 +888,8 @@ fillCurrencySelects();
 window.addEventListener('message', ev => {
   const d = ev.data;
   if (!d || d.type !== 'wishlist-photo' || typeof d.imageData !== 'string' || !d.imageData.startsWith('data:image/') || d.imageData.length > 2.5e6) return;
-  const u = parseUrl(d.url); if (!u) return;
-  const it = state.items.find(x => x.url === u.href); if (!it) return;
+  const key = canonUrl(d.url); if (!key) return;
+  const it = state.items.find(x => canonUrl(x.url) === key); if (!it) return;
   // The captured photo replaces whatever was there: the page can measure and center this one.
   if (it.imageData === d.imageData) return;
   saveItem({ ...it, imageData: d.imageData, image: undefined });
@@ -886,7 +899,10 @@ window.addEventListener('message', ev => {
 /* ---------- bookmarklet ---------- */
 // Runs on a store page in the user's own browser (where nothing is blocked), reads the product
 // details from that page, and opens the wishlist with them. The wishlist URL is filled in below.
-const BOOKMARKLET = `(function(){var d=document,q=function(s){var e=d.querySelector(s);return e?(e.getAttribute('content')||e.textContent||'').trim():''};var n='',b='',p='',cu='',im='',est='';var sc=d.querySelectorAll('script[type="application/ld+json"]');for(var i=0;i<sc.length;i++){try{var j=JSON.parse(sc[i].textContent);var a=[].concat(j['@graph']||j);for(var k=0;k<a.length;k++){var o=a[k];if(o&&/Product/.test(String(o['@type']))){if(!n&&typeof o.name=='string')n=o.name;if(!b&&o.brand)b=o.brand.name||(typeof o.brand=='string'?o.brand:'');var f=[].concat(o.offers||[])[0];if(f&&!p&&(f.price||f.lowPrice)){p=String(f.price||f.lowPrice);cu=f.priceCurrency||''}var g=[].concat(o.image||[])[0];if(!im&&g)im=g.url||(typeof g=='string'?g:'')}}}catch(e){}}n=n||q('meta[property="og:title"]')||d.title;im=q('meta[property="og:image"]')||im;if(!p){p=q('meta[property="product:price:amount"]')||q('[itemprop="price"]');cu=cu||q('meta[property="product:price:currency"]')}if(!p){var t=(d.body.innerText||'').slice(0,20000),m=t.match(/(\\u20ac|\\u00a3|\\$)\\s?(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d\\d)?)/);if(m){p=m[2];cu={'\\u20ac':'EUR','\\u00a3':'GBP','$':'USD'}[m[1]];est='1'}}var u='__WISHLIST__?add='+encodeURIComponent(location.href)+'&name='+encodeURIComponent(n)+'&brand='+encodeURIComponent(b)+'&price='+encodeURIComponent(p||'')+'&cur='+encodeURIComponent(cu||'')+'&image='+encodeURIComponent(im||'')+'&est='+est;var w=window.open(u,'_blank');if(im&&w){try{var g=new Image();g.crossOrigin='anonymous';g.onload=function(){try{var s=Math.min(1,800/Math.max(g.naturalWidth,g.naturalHeight)),c=d.createElement('canvas');c.width=Math.round(g.naturalWidth*s);c.height=Math.round(g.naturalHeight*s);var x=c.getContext('2d');x.fillStyle='white';x.fillRect(0,0,c.width,c.height);x.drawImage(g,0,0,c.width,c.height);var data=c.toDataURL('image/jpeg',0.85);var send=function(){try{w.postMessage({type:'wishlist-photo',url:location.href,imageData:data},'*')}catch(e){}};window.addEventListener('message',function(e){if(e.data==='wishlist-ready')send()});setTimeout(send,3000);setTimeout(send,7000)}catch(e){}};g.src=im}catch(e){}}})();`;
+// Photo choice: candidates are the share image, schema.org images and the largest pictures shown on
+// the page. Each is copied in the store's own origin; a copy whose corners are one flat color (a
+// packshot) is preferred over a model or lifestyle shot, in candidate order.
+const BOOKMARKLET = `(function(){var d=document,q=function(s){var e=d.querySelector(s);return e?(e.getAttribute('content')||e.textContent||'').trim():''};var n='',b='',p='',cu='',est='',cands=[];var sc=d.querySelectorAll('script[type="application/ld+json"]');for(var i=0;i<sc.length;i++){try{var j=JSON.parse(sc[i].textContent);var a=[].concat(j['@graph']||j);for(var k=0;k<a.length;k++){var o=a[k];if(o&&/Product/.test(String(o['@type']))){if(!n&&typeof o.name=='string')n=o.name;if(!b&&o.brand)b=o.brand.name||(typeof o.brand=='string'?o.brand:'');var f=[].concat(o.offers||[])[0];if(f&&!p&&(f.price||f.lowPrice)){p=String(f.price||f.lowPrice);cu=f.priceCurrency||''}var gs=[].concat(o.image||[]);for(var z=0;z<gs.length;z++){var g=gs[z];cands.push(g&&(g.url||(typeof g=='string'?g:'')))}}}}catch(e){}}n=n||q('meta[property="og:title"]')||d.title;var og=q('meta[property="og:image"]');if(og)cands.unshift(og);var big=[].slice.call(d.images).filter(function(x){var r=x.getBoundingClientRect();return r.width>=180&&r.height>=180&&!/logo|icon|sprite/i.test(x.src+' '+x.className+' '+x.alt)}).sort(function(x,y){var rx=x.getBoundingClientRect(),ry=y.getBoundingClientRect();return ry.width*ry.height-rx.width*rx.height}).slice(0,4).map(function(x){return x.currentSrc||x.src});cands=cands.concat(big).filter(function(x,i,arr){return x&&/^https?:/.test(x)&&arr.indexOf(x)===i}).slice(0,8);if(!p){p=q('meta[property="product:price:amount"]')||q('[itemprop="price"]');cu=cu||q('meta[property="product:price:currency"]')}if(!p){var t=(d.body.innerText||'').slice(0,20000),m=t.match(/(\\u20ac|\\u00a3|\\$)\\s?(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d\\d)?)/);if(m){p=m[2];cu={'\\u20ac':'EUR','\\u00a3':'GBP','$':'USD'}[m[1]];est='1'}}var u='__WISHLIST__?add='+encodeURIComponent(location.href)+'&name='+encodeURIComponent(n)+'&brand='+encodeURIComponent(b)+'&price='+encodeURIComponent(p||'')+'&cur='+encodeURIComponent(cu||'')+'&image='+encodeURIComponent(cands[0]||'')+'&est='+est;var w=window.open(u,'_blank');if(!w||!cands.length)return;var res=[],left=cands.length,sent=false,ready=false;function pick(){for(var i=0;i<res.length;i++)if(res[i]&&res[i].u)return res[i].d;for(var i=0;i<res.length;i++)if(res[i])return res[i].d;return null}function trySend(){if(sent||!ready||left>0)return;var dd=pick();if(!dd)return;sent=true;try{w.postMessage({type:'wishlist-photo',url:location.href,imageData:dd},'*')}catch(e){}}window.addEventListener('message',function(e){if(e.data==='wishlist-ready'){ready=true;trySend()}});setTimeout(function(){ready=true;left=0;trySend()},9000);cands.forEach(function(src,idx){var g=new Image();g.crossOrigin='anonymous';g.onload=function(){try{var s=Math.min(1,800/Math.max(g.naturalWidth,g.naturalHeight)),c=d.createElement('canvas');c.width=Math.round(g.naturalWidth*s);c.height=Math.round(g.naturalHeight*s);var x=c.getContext('2d');x.fillStyle='white';x.fillRect(0,0,c.width,c.height);x.drawImage(g,0,0,c.width,c.height);var W=c.width,H=c.height,px=function(a,b2){var v=x.getImageData(a,b2,1,1).data;return[v[0],v[1],v[2]]},cs=[px(1,1),px(W-2,1),px(1,H-2),px(W-2,H-2)],mx=0;for(var i=0;i<3;i++){var vals=cs.map(function(c2){return c2[i]});mx=Math.max(mx,Math.max.apply(null,vals)-Math.min.apply(null,vals))}res[idx]={d:c.toDataURL('image/jpeg',0.85),u:mx<30}}catch(e){}left--;trySend()};g.onerror=function(){left--;trySend()};g.src=src})})();`;
 {
   const a = $('#bookmarklet');
   if (a) {
