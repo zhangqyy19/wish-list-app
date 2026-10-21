@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "ex-rhode-lip",
+      "url": "https://www.rhodeskin.com/products/peptide-lip-treatment",
+      "name": "Peptide Lip Treatment, Unscented",
+      "brand": "rhode",
+      "price": 20,
+      "priceGuess": false,
+      "currency": "USD",
+      "tags": ["beauty", "skincare"],
+      "limited": false,
+      "image": "https://www.rhodeskin.com/cdn/shop/files/main-png-2000x2000_unscented_480x480.png?v=1705598678",
+      "color": 350,
+      "createdAt": 1760400000000,
+      "got": false,
+      "example": true
+    },
+    {
+      "id": "ex-oura-ring",
+      "url": "https://ouraring.com/product/rings/oura-ring-4",
+      "name": "Oura Ring 4, Silver",
+      "brand": "Oura",
+      "price": 349,
+      "priceGuess": true,
+      "currency": "USD",
+      "tags": ["wellness", "tech"],
+      "limited": false,
+      "image": "https://images.weserv.nl/?url=https%3A%2F%2Fourahealth.imgix.net%2FlineItem%2For4-silver.png%3Fs%3D0328b44245d42e02f75296a981eed5a0&w=900&q=82",
+      "color": 210,
+      "createdAt": 1760300000000,
+      "got": false,
+      "example": true
+    },
+    {
+      "id": "ex-glossier-you",
+      "url": "https://www.glossier.com/products/glossier-you",
+      "name": "Glossier You Eau de Parfum",
+      "brand": "Glossier",
+      "price": 32,
+      "priceGuess": false,
+      "currency": "USD",
+      "tags": ["fragrance", "beauty"],
+      "limited": false,
+      "image": "https://www.glossier.com/cdn/shop/files/glossier-fragrance-you-01.png?v=1762200697",
+      "color": 345,
+      "createdAt": 1760200000000,
+      "got": false,
+      "example": true
+    },
+    {
+      "id": "ex-diptyque-baies",
+      "url": "https://www.diptyqueparis.com/en_us/p/baies-berries-candle-190g.html",
+      "name": "Baies Classic Candle",
+      "brand": "Diptyque",
+      "price": 90,
+      "priceGuess": false,
+      "currency": "USD",
+      "tags": ["home", "wellness"],
+      "limited": true,
+      "limitedNote": "Example of the gold limited-edition mark",
+      "image": "https://us.diptyqueparis.com/cdn/shop/files/diptyque-baiesclassiccandle-B2-front.webp?v=1781571444&width=1200",
+      "color": 40,
+      "createdAt": 1760100000000,
+      "got": false,
+      "example": true
+    }
+  ]
+}
