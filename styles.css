@@ -232,6 +232,8 @@ h1,h2,h3{margin:0;text-wrap:balance;font-weight:400}
 .databar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:28px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .databar .grow{flex:1;min-width:12ch}
 .databar .ghost{background:var(--surface)}
+.bm{display:inline-block;margin-left:4px;padding:4px 12px;border-radius:999px;background:var(--gold-soft);border:1px solid var(--gold-2);color:var(--gold-ink);text-decoration:none;font-weight:500;cursor:grab;white-space:nowrap}
+.bm:hover{background:var(--gold-3)}
 
 /* ---------- edit sheet ---------- */
 .scrim{position:fixed;inset:0;background:rgba(30,15,25,.35);backdrop-filter:blur(2px);z-index:20}

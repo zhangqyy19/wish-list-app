@@ -20,8 +20,9 @@ const MICROLINK = u => `https://api.microlink.io/?url=${encodeURIComponent(u)}`;
 // If the proxy fails, the original loads untouched.
 const IMG_FIT = u => `https://images.weserv.nl/?url=${encodeURIComponent(u)}&w=900&h=1100&fit=inside&we&bg=ffffff&q=85&output=jpg`;
 // Every photo is redrawn onto the same 4:5 white tile with the product centered and scaled so its
-// longest side spans this share of the tile. That is what makes items look the same size.
-const TILE = { w: 720, h: 900, fill: 0.70 };
+// bounding box covers about `area` of the tile, never exceeding `max` of either side. Matching area
+// rather than height makes a thin tube and a wide ring look the same size.
+const TILE = { w: 720, h: 900, area: 0.30, max: 0.80 };
 // Exchange rates (European Central Bank reference rates, USD base).
 const RATES_URL = 'https://api.frankfurter.dev/v1/latest?base=USD';
 const RATES_FALLBACK = { date: '2026-10-15', fetchedAt: 0, rates: {"AUD":1.447,"BRL":5.057,"CAD":1.4207,"CHF":0.83021,"CNY":6.691,"CZK":21.728,"DKK":6.6693,"EUR":0.89222,"GBP":0.75491,"HKD":7.8473,"HUF":324.41,"IDR":17944,"ILS":3.1022,"INR":95.06,"ISK":121.7,"JPY":157.98,"KRW":1345.9,"MXN":18.5225,"MYR":4.0825,"NOK":9.5039,"NZD":1.7855,"PHP":63.074,"PLN":3.899,"RON":4.7588,"SEK":9.9719,"SGD":1.2829,"THB":33.54,"TRY":49.417,"ZAR":16.5568} };
@@ -220,9 +221,9 @@ window.wlFit = function(img){
     const bb = bbox(small.getContext('2d').getImageData(0, 0, small.width, small.height).data, small.width, small.height);
     let bw = bb.r - bb.l + 1, bh = bb.b - bb.t + 1;
     if (bw < 8 || bh < 8) { bb.l = 0; bb.t = 0; bw = small.width; bh = small.height; }
-    // Scale so the longest side fills TILE.fill of the tile, without blowing up a tiny source.
-    let scale = Math.min(TILE.w * TILE.fill / bw, TILE.h * TILE.fill / bh);
-    scale = Math.min(scale, 1.6 / s0);
+    // Scale to the target area, capped so neither side exceeds TILE.max, without blowing up a tiny source.
+    let scale = Math.sqrt(TILE.w * TILE.h * TILE.area / (bw * bh));
+    scale = Math.min(scale, TILE.w * TILE.max / bw, TILE.h * TILE.max / bh, 1.6 / s0);
     const dw = bw * scale, dh = bh * scale;
     const o = document.createElement('canvas'); o.width = TILE.w; o.height = TILE.h;
     const x = o.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, TILE.w, TILE.h); x.imageSmoothingQuality = 'high';
@@ -432,14 +433,17 @@ async function refine(id){
   } catch { m = null; }
   if (!m) { try { m = await fetchMicrolink(u.href); if (m && (!m.title || BLOCKED_RX.test(m.title))) m = null; } catch { m = null; } }
   const cur = state.items.find(x => x.id === id); if (!cur) return false;
-  if (!m) { console.warn(`[wishlist] no reader could read ${u.href}`); saveItem({ ...cur, status: 'ready' }); return false; }
+  // Details handed over by the bookmarklet were read in the user's own browser and win over anything fetched.
+  const given = cur._given || {};
+  const settle = () => { const s = { ...cur, status: 'ready' }; delete s._given; saveItem(s); };
+  if (!m) { console.warn(`[wishlist] no reader could read ${u.href}`); settle(); return !!given.name; }
   // Some stores answer readers with a different page (Dior's beauty site sends another product).
   // If none of the link's own words appear in what came back, the page is not this product.
   const sw = guessFromUrl(u).slugWords;
   const hay = `${m.ldName} ${m.title} ${m.ldDescription} ${m.description}`.toLowerCase();
   if (sw.length >= 2 && !sw.some(w => hay.includes(w))) {
     console.warn(`[wishlist] page for ${u.href} does not mention ${sw.join('/')} (got "${m.ldName || m.title}"), keeping the link guess`);
-    saveItem({ ...cur, status: 'ready' }); return false;
+    settle(); return !!given.name;
   }
   console.info('[wishlist] metadata for', u.href, { title: m.title, ldName: m.ldName, brand: m.brand, site: m.site, price: m.price, currency: m.currency, ldPrice: m.ldPrice, ldCurrency: m.ldCurrency, images: [...m.images, ...m.ldImages].filter(Boolean).slice(0, 3) });
 
@@ -459,15 +463,23 @@ async function refine(id){
   if (lm) { next.limited = true; next.limitedNote = `The store page says "${lm[0]}"`; }
   else if (LIMITED_SLUG_RX.test(u.pathname)) { next.limited = true; next.limitedNote = cur.limitedNote || 'The link mentions a special edition'; }
   next.color = hue(brand);
+  Object.assign(next, given); delete next._given;
   saveItem(next);
   return true;
 }
 
-async function addFromLink(raw, imageBlob){
+// `given` holds details the bookmarklet read on the store page itself: name, brand, price, currency, image.
+async function addFromLink(raw, imageBlob, given = {}){
   const u = parseUrl(raw); if (!u) { toast('That does not look like a link.'); return false; }
   const g = guessFromUrl(u);
   const item = { id: uid(), url: u.href, name: g.name, brand: g.brand, tags: g.tags, limited: g.limited, limitedNote: g.limitedNote, color: g.color, price: null, currency: 'USD', createdAt: Date.now(), status: 'reading', got: false };
   if (imageBlob) Object.assign(item, await storeImage(imageBlob));
+  if (given.name) {
+    given.name = cleanName(given.name, given.brand || g.brand, '', u.hostname.toLowerCase()) || given.name;
+    item.tags = tagsFor(`${u.hostname} ${u.pathname} ${given.name}`);
+    if (LIMITED_TEXT_RX.test(given.name)) { item.limited = true; item.limitedNote = 'The product name says so'; }
+  }
+  if (Object.keys(given).length) { Object.assign(item, given); item._given = given; }
   saveItem(item);
   refine(item.id).then(ok => { if (!ok) toast('Could not read that store page (some stores block readers). Added from the link alone; click it to edit or attach a photo.'); });
   return true;
@@ -817,10 +829,43 @@ fillCurrencySelects();
     persist(); render();
   }
   loadRates();
-  // ?add=<link> adds that link on load (handy for a bookmarklet or a share shortcut).
-  const add = new URLSearchParams(location.search).get('add');
-  if (add && parseUrl(add)) { history.replaceState(null, '', location.pathname); addFromLink(add, null); }
+  // ?add=<link> adds that link on load. The bookmarklet also passes name, brand, price, cur, image, est.
+  const qs = new URLSearchParams(location.search);
+  const add = qs.get('add');
+  if (add && parseUrl(add)) {
+    const given = {};
+    const nm = (qs.get('name') || '').trim(); if (nm) given.name = nm.slice(0, 120);
+    const br = (qs.get('brand') || '').trim(); if (br) given.brand = br.slice(0, 60);
+    const pr = num(qs.get('price')); if (pr != null) { given.price = pr; given.priceGuess = qs.get('est') === '1'; const c = (qs.get('cur') || 'USD').toUpperCase(); given.currency = /^[A-Z]{3}$/.test(c) ? c : 'USD'; }
+    const im = pickImage([qs.get('image') || '']); if (im) given.image = im;
+    history.replaceState(null, '', location.pathname);
+    addFromLink(add, null, given);
+  }
+  // Tell the bookmarklet (our opener) we are ready to receive the photo it captured on the store page.
+  if (window.opener) { try { window.opener.postMessage('wishlist-ready', '*'); } catch {} }
 })();
+// Photo handed over by the bookmarklet: a small JPEG data URL captured on the store page, where the
+// store's own image is same-origin and readable. It is attached to the item with that link.
+window.addEventListener('message', ev => {
+  const d = ev.data;
+  if (!d || d.type !== 'wishlist-photo' || typeof d.imageData !== 'string' || !d.imageData.startsWith('data:image/') || d.imageData.length > 2.5e6) return;
+  const u = parseUrl(d.url); if (!u) return;
+  const it = state.items.find(x => x.url === u.href); if (!it || it.imageData) return;
+  saveItem({ ...it, imageData: d.imageData, image: undefined });
+  toast('Photo added from the store page.');
+});
+
+/* ---------- bookmarklet ---------- */
+// Runs on a store page in the user's own browser (where nothing is blocked), reads the product
+// details from that page, and opens the wishlist with them. The wishlist URL is filled in below.
+const BOOKMARKLET = `(function(){var d=document,q=function(s){var e=d.querySelector(s);return e?(e.getAttribute('content')||e.textContent||'').trim():''};var n='',b='',p='',cu='',im='',est='';var sc=d.querySelectorAll('script[type="application/ld+json"]');for(var i=0;i<sc.length;i++){try{var j=JSON.parse(sc[i].textContent);var a=[].concat(j['@graph']||j);for(var k=0;k<a.length;k++){var o=a[k];if(o&&/Product/.test(String(o['@type']))){if(!n&&typeof o.name=='string')n=o.name;if(!b&&o.brand)b=o.brand.name||(typeof o.brand=='string'?o.brand:'');var f=[].concat(o.offers||[])[0];if(f&&!p&&(f.price||f.lowPrice)){p=String(f.price||f.lowPrice);cu=f.priceCurrency||''}var g=[].concat(o.image||[])[0];if(!im&&g)im=g.url||(typeof g=='string'?g:'')}}}catch(e){}}n=n||q('meta[property="og:title"]')||d.title;im=q('meta[property="og:image"]')||im;if(!p){p=q('meta[property="product:price:amount"]')||q('[itemprop="price"]');cu=cu||q('meta[property="product:price:currency"]')}if(!p){var t=(d.body.innerText||'').slice(0,20000),m=t.match(/(\\u20ac|\\u00a3|\\$)\\s?(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d\\d)?)/);if(m){p=m[2];cu={'\\u20ac':'EUR','\\u00a3':'GBP','$':'USD'}[m[1]];est='1'}}var u='__WISHLIST__?add='+encodeURIComponent(location.href)+'&name='+encodeURIComponent(n)+'&brand='+encodeURIComponent(b)+'&price='+encodeURIComponent(p||'')+'&cur='+encodeURIComponent(cu||'')+'&image='+encodeURIComponent(im||'')+'&est='+est;var w=window.open(u,'_blank');if(im&&w){try{var g=new Image();g.crossOrigin='anonymous';g.onload=function(){try{var s=Math.min(1,800/Math.max(g.naturalWidth,g.naturalHeight)),c=d.createElement('canvas');c.width=Math.round(g.naturalWidth*s);c.height=Math.round(g.naturalHeight*s);var x=c.getContext('2d');x.fillStyle='white';x.fillRect(0,0,c.width,c.height);x.drawImage(g,0,0,c.width,c.height);var data=c.toDataURL('image/jpeg',0.85);var send=function(){try{w.postMessage({type:'wishlist-photo',url:location.href,imageData:data},'*')}catch(e){}};window.addEventListener('message',function(e){if(e.data==='wishlist-ready')send()});setTimeout(send,3000);setTimeout(send,7000)}catch(e){}};g.src=im}catch(e){}}})();`;
+{
+  const a = $('#bookmarklet');
+  if (a) {
+    a.href = 'javascript:' + BOOKMARKLET.replace('__WISHLIST__', location.origin + location.pathname);
+    a.onclick = ev => { ev.preventDefault(); toast('Drag this button to your bookmarks bar, then click it while viewing a product on any store.'); };
+  }
+}
 // Debug hooks for the browser console, e.g. wlDebug.read('https://…') to see what the readers return.
 window.wlDebug = { state, read: async u => { const h = await fetchPageHtml(u); return h ? parseHtmlMeta(h, u) : null; }, microlink: fetchMicrolink, refine, rates: () => fx };
 })();
