@@ -490,16 +490,24 @@ async function refine(id){
 async function addFromLink(raw, imageBlob, given = {}){
   const u = parseUrl(raw); if (!u) { toast('That does not look like a link.'); return false; }
   const g = guessFromUrl(u);
-  const item = { id: uid(), url: u.href, name: g.name, brand: g.brand, tags: g.tags, limited: g.limited, limitedNote: g.limitedNote, color: g.color, price: null, currency: 'USD', createdAt: Date.now(), status: 'reading', got: false };
+  // Saving a link that is already on the list (e.g. the bookmarklet used again on the same product)
+  // updates that card in place instead of adding a duplicate.
+  const existing = state.items.find(x => x.url === u.href);
+  const item = existing
+    ? { ...existing, status: 'reading' }
+    : { id: uid(), url: u.href, name: g.name, brand: g.brand, tags: g.tags, limited: g.limited, limitedNote: g.limitedNote, color: g.color, price: null, currency: 'USD', createdAt: Date.now(), status: 'reading', got: false };
   if (imageBlob) Object.assign(item, await storeImage(imageBlob));
   if (given.name) {
     given.name = cleanName(given.name, given.brand || g.brand, '', u.hostname.toLowerCase()) || given.name;
-    item.tags = tagsFor(`${u.hostname} ${u.pathname} ${given.name}`);
+    if (!existing) item.tags = tagsFor(`${u.hostname} ${u.pathname} ${given.name}`);
     if (LIMITED_TEXT_RX.test(given.name)) { item.limited = true; item.limitedNote = 'The product name says so'; }
   }
   if (Object.keys(given).length) { Object.assign(item, given); item._given = given; }
   saveItem(item);
-  refine(item.id).then(ok => { if (!ok) toast('Could not read that store page (some stores block readers). Added from the link alone; click it to edit or attach a photo.'); });
+  refine(item.id).then(ok => {
+    if (ok && existing) toast('Updated the existing card for that link.');
+    else if (!ok && !given.name) toast('Could not read that store page (some stores block readers). Added from the link alone; click it to edit or attach a photo.');
+  });
   return true;
 }
 
@@ -868,9 +876,11 @@ window.addEventListener('message', ev => {
   const d = ev.data;
   if (!d || d.type !== 'wishlist-photo' || typeof d.imageData !== 'string' || !d.imageData.startsWith('data:image/') || d.imageData.length > 2.5e6) return;
   const u = parseUrl(d.url); if (!u) return;
-  const it = state.items.find(x => x.url === u.href); if (!it || it.imageData) return;
+  const it = state.items.find(x => x.url === u.href); if (!it) return;
+  // The captured photo replaces whatever was there: the page can measure and center this one.
+  if (it.imageData === d.imageData) return;
   saveItem({ ...it, imageData: d.imageData, image: undefined });
-  toast('Photo added from the store page.');
+  toast('Photo copied from the store page.');
 });
 
 /* ---------- bookmarklet ---------- */
