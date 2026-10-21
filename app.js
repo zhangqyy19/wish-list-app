@@ -191,20 +191,38 @@ function pickImage(cands){
   }
   return '';
 }
-// Bounding box of the non-background pixels (background = near-white or the corner color).
+// Bounding box of the main object in a photo. Background is near-white or the dominant edge color.
+// Rows and columns are grouped into bands of content; the band with the most pixels wins, so a
+// caption, a price line or a strip of page chrome in a screenshot does not drag the box around.
 function bbox(d, w, h){
-  const corner = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
-  const cs = [corner(0, 0), corner(w - 1, 0), corner(0, h - 1), corner(w - 1, h - 1)];
-  const bg = [0, 1, 2].map(k => Math.round(cs.reduce((s, c) => s + c[k], 0) / 4));
-  const isBg = i => { const r = d[i], g = d[i + 1], b = d[i + 2]; return (r > 232 && g > 232 && b > 232) || Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]) < 36; };
-  const rowBg = y => { for (let x = 0; x < w; x++) if (!isBg((y * w + x) * 4)) return false; return true; };
-  const colBg = (x, t, b) => { for (let y = t; y <= b; y++) if (!isBg((y * w + x) * 4)) return false; return true; };
-  let t = 0, b = h - 1, l = 0, r = w - 1;
-  while (t < b && rowBg(t)) t++;
-  while (b > t && rowBg(b)) b--;
-  while (l < r && colBg(l, t, b)) l++;
-  while (r > l && colBg(r, t, b)) r--;
-  return { l, t, r, b };
+  const px = (x, y) => { const i = (y * w + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+  const edge = [];
+  for (let x = 0; x < w; x += Math.max(1, w >> 5)) { edge.push(px(x, 0), px(x, h - 1)); }
+  for (let y = 0; y < h; y += Math.max(1, h >> 5)) { edge.push(px(0, y), px(w - 1, y)); }
+  const bg = [0, 1, 2].map(k => { const v = edge.map(c => c[k]).sort((a, b) => a - b); return v[v.length >> 1]; });
+  const isBg = i => { const r = d[i], g = d[i + 1], b = d[i + 2]; return (r > 232 && g > 232 && b > 232) || Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]) < 42; };
+  // Pick the heaviest contiguous band of content along one axis.
+  const band = (n, massAt, gapAllow) => {
+    const mass = new Array(n); for (let i = 0; i < n; i++) mass[i] = massAt(i);
+    const bands = []; let cur = null, gap = 0;
+    for (let i = 0; i < n; i++) {
+      if (mass[i] > 0) { if (!cur) cur = { a: i, b: i, sum: 0 }; cur.b = i; cur.sum += mass[i]; gap = 0; }
+      else if (cur && ++gap > gapAllow) { bands.push(cur); cur = null; gap = 0; }
+    }
+    if (cur) bands.push(cur);
+    if (!bands.length) return { a: 0, b: n - 1 };
+    return bands.reduce((best, x) => x.sum > best.sum ? x : best);
+  };
+  const rowMass = y => { let m = 0; for (let x = 0; x < w; x++) if (!isBg((y * w + x) * 4)) m++; return m; };
+  const rows = band(h, rowMass, Math.max(2, Math.round(h * 0.03)));
+  const colMass = x => { let m = 0; for (let y = rows.a; y <= rows.b; y++) if (!isBg((y * w + x) * 4)) m++; return m; };
+  const cols = band(w, colMass, Math.max(2, Math.round(w * 0.03)));
+  // Re-tighten the rows inside the chosen columns, then return.
+  const rowMass2 = y => { let m = 0; for (let x = cols.a; x <= cols.b; x++) if (!isBg((y * w + x) * 4)) m++; return m; };
+  let t = rows.a, b = rows.b;
+  while (t < b && rowMass2(t) === 0) t++;
+  while (b > t && rowMass2(b) === 0) b--;
+  return { l: cols.a, t, r: cols.b, b };
 }
 // Redraw a loaded photo onto the standard tile: product found, centered, scaled to TILE.fill.
 // Needs pixel access, so it works for proxied and attached photos and is skipped for the raw fallback.

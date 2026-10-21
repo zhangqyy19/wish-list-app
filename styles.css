@@ -125,6 +125,8 @@ h1,h2,h3{margin:0;text-wrap:balance;font-weight:400}
 :root[data-theme="dark"] .media .ph span,:root[data-theme="dark"] .sheet-media .ph span{color:hsl(var(--h) 40% 80% / .8)}
 /* Product photos sit on a white tile, scaled to fit with an even margin so they read as one set. */
 .media img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;background:#fff}
+/* A photo the page could not measure (store blocked the proxy) at least gets the same margin. */
+.media img[data-stage="1"]{padding:14%}
 .row .media img{padding:2px}
 .addph{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);font-size:11px;letter-spacing:.06em;text-transform:uppercase;background:var(--surface);color:var(--muted);border-radius:999px;padding:4px 10px;white-space:nowrap}
 .row .addph{display:none}
