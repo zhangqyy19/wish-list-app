@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&display=swap">
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
 
@@ -114,6 +114,7 @@
   <div class="sheet-head"><h2>Edit</h2><button type="button" class="ghost" id="sheetClose">Close</button></div>
   <div class="sheet-media" id="sheetMedia" tabindex="0" role="button" aria-label="Replace photo"><div id="sheetMediaInner"></div><span class="hint">Click, drop or paste a photo to replace</span></div>
   <input type="file" id="sheetFile" accept="image/*" hidden>
+  <p class="rawnote" id="sheetRawNote" hidden><b>This photo can't be centered.</b> The store lets your browser show it but blocks the page from reading it, and "Re-read link" can't help because the store blocks readers too. Either <b>copy the photo yourself</b>: on the store page right-click the product picture, choose Copy Image, come back here and press Cmd+V. Or use the <b>✦ Save to wishlist</b> bookmark while on the product page, which copies it for you.</p>
   <label class="field">Name<input id="fName"></label>
   <div class="two">
     <label class="field">Brand<input id="fBrand"></label>
@@ -139,6 +140,6 @@
   </div>
 </aside>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

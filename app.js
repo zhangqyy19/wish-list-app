@@ -252,12 +252,13 @@ window.wlFit = function(img){
 };
 // Called from the img tag. Stage 0 is the proxy copy; a failure falls back to the original store
 // URL (without cross-origin reading, so it cannot be reframed); a second failure hides the photo.
+const rawPhotos = new Set(); // photo URLs the page could load but not measure
 window.wlImgErr = function(img){
   const orig = img.dataset.src;
   if (orig && img.dataset.stage === '0' && /^https?:\/\//i.test(orig)) {
     img.dataset.stage = '1'; img.removeAttribute('crossorigin'); img.src = orig;
     // Flag the card: this photo cannot be measured, so it cannot be centered on the product.
-    img.closest('.media')?.classList.add('is-raw');
+    rawPhotos.add(orig); img.closest('.media')?.classList.add('is-raw');
     return;
   }
   img.style.display = 'none';
@@ -668,6 +669,7 @@ function openSheet(id){
   $('#fTags').value = (i.tags || []).join(', '); $('#fLimited').checked = !!i.limited; $('#fLimitedNote').value = i.limitedNote || '';
   $('#fUrl').value = i.url || ''; $('#fImage').value = i.image || ''; $('#fNote').value = i.note || '';
   $('#fGot').textContent = i.got ? 'Not got yet' : 'Got it'; $('#fDelete').textContent = 'Remove';
+  $('#sheetRawNote').hidden = !(i.image && !i.imageData && rawPhotos.has(i.image));
   renderSheetMedia(); renderSugg();
   $('#scrim').hidden = false; $('#sheet').hidden = false; $('#fName').focus();
 }

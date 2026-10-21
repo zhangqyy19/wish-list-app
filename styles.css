@@ -252,6 +252,8 @@ h1,h2,h3{margin:0;text-wrap:balance;font-weight:400}
   radial-gradient(90% 90% at 80% 90%,hsl(calc(var(--h) + 40) var(--ph-s) var(--ph-l)),hsl(var(--h) var(--ph-s) calc(var(--ph-l) - 6%)))}
 .sheet-media .ph span{font-family:var(--font-display);font-style:italic;font-size:clamp(28px,12cqw,72px);color:hsl(var(--h) 30% 35% / .75);line-height:1}
 .sheet-media .hint{position:absolute;left:10px;right:10px;bottom:10px;font-size:12px;text-align:center;background:var(--surface);color:var(--muted);border-radius:999px;padding:6px 10px;opacity:.95}
+.rawnote{font-size:13px;line-height:1.5;color:var(--gold-ink);background:var(--gold-soft);border:1px solid var(--gold-2);border-radius:12px;padding:10px 12px;margin:0}
+.rawnote b{font-weight:600}
 .field{display:flex;flex-direction:column;gap:5px;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .field input,.field textarea{font-size:15px;letter-spacing:0;text-transform:none;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;width:100%}
 .field textarea{min-height:70px;resize:vertical}
